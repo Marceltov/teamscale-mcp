@@ -33,5 +33,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8081
 
+# curl is installed above for exactly this. urlopen-style probes are not
+# needed: /health is a plain 200.
+# `|| exit 1` normalises curl's exit codes — Docker reserves exit 2, which
+# curl uses for its own init failures.
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf -o /dev/null http://localhost:8081/health || exit 1
+
 # All configuration is via environment variables (see README).
 CMD ["python", "server.py"]
