@@ -189,6 +189,8 @@ All configuration is via environment variables:
 | `TEAMSCALE_SPEC_USER`        | *(required)*            | Bootstrap technical user used only to download the OpenAPI spec at startup.                              |
 | `TEAMSCALE_SPEC_TOKEN`       | *(required)*            | API token for `TEAMSCALE_SPEC_USER`.                                                                     |
 | `TEAMSCALE_INCLUDE_INTERNAL` | `false`                 | `include-internal` query param on the spec download; `true` also exposes internal-only operations.       |
+| `TEAMSCALE_STARTUP_TIMEOUT`  | `600`                   | Seconds to keep retrying the startup (spec download, OIDC discovery) before serving the `startup_error` fallback. |
+| `TEAMSCALE_STARTUP_RETRY_INTERVAL` | `5`               | Seconds between startup attempts.                                                                        |
 | `TEAMSCALE_EXCLUDE_TAGS`     | *(unset)*               | Comma-separated OpenAPI tags to drop from the generated tool surface.                                    |
 | `TEAMSCALE_INCLUDE_TAGS`     | *(unset = all)*         | Comma-separated tag allowlist; when set, only matching tags become tools.                                |
 | `TEAMSCALE_EXCLUDE_METHODS`  | *(unset)*               | Comma-separated HTTP methods to drop (case-insensitive), e.g. `DELETE` to remove destructive operations. |
@@ -395,9 +397,15 @@ the host[:port] values you actually use (e.g.
 `192.168.1.50:8081,teamscale.example.com`); `localhost` is always allowed, and anything
 else gets a `421`.
 
-If the OpenAPI spec cannot be downloaded at startup, the server still starts and
-completes the MCP handshake, but exposes only a single `startup_error` tool describing
-how to fix it (rather than failing with an opaque connection error).
+Teamscale boots much slower than this sidecar, so when both start together (compose
+up, a Docker daemon restart) the first spec download is refused. Startup is therefore
+retried every `TEAMSCALE_STARTUP_RETRY_INTERVAL` seconds for up to
+`TEAMSCALE_STARTUP_TIMEOUT` seconds (default 5 s / 10 min); the container's health
+check stays failing until an attempt succeeds. Only once that window is exhausted
+does the server fall back: it still starts and completes the MCP handshake, but
+exposes only a single `startup_error` tool describing how to fix it (rather than
+failing with an opaque connection error), and `/health` answers `503` until the
+container is restarted.
 
 ## Relationship to the Teamscale Claude Code plugin
 

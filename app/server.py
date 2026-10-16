@@ -1,6 +1,7 @@
 import base64
 import os
 import sys
+import time
 import traceback
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -519,9 +520,57 @@ def serve(mcp: FastMCP, *, force_token_gate: bool = False) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+STARTUP_TIMEOUT_ENV = "TEAMSCALE_STARTUP_TIMEOUT"
+STARTUP_RETRY_INTERVAL_ENV = "TEAMSCALE_STARTUP_RETRY_INTERVAL"
+DEFAULT_STARTUP_TIMEOUT = 600.0
+DEFAULT_STARTUP_RETRY_INTERVAL = 5.0
+
+
+def build_server_with_retry(
+    build: Callable[[], FastMCP] = build_server,
+    *,
+    timeout: float | None = None,
+    interval: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> FastMCP:
+    """Call `build` until it succeeds or `timeout` seconds have elapsed.
+
+    Teamscale boots far slower than this sidecar, so when both are started at
+    once (compose up, a Docker daemon restart) the first spec download sees
+    "connection refused". Rather than giving up on one attempt and serving the
+    `startup_error` fallback until someone restarts the container, keep trying
+    every `interval` seconds for `timeout` seconds. The last error is re-raised
+    once the deadline passes, so the fallback still applies to a Teamscale
+    that never comes up. Both knobs are env-configurable; `sleep`/`clock` are
+    injectable for tests.
+    """
+    if timeout is None:
+        timeout = float(os.environ.get(STARTUP_TIMEOUT_ENV, DEFAULT_STARTUP_TIMEOUT))
+    if interval is None:
+        interval = float(
+            os.environ.get(STARTUP_RETRY_INTERVAL_ENV, DEFAULT_STARTUP_RETRY_INTERVAL)
+        )
+    deadline = clock() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return build()
+        except Exception as e:
+            if clock() >= deadline:
+                raise
+            print(
+                f"Startup attempt {attempt} failed: {e} -- retrying in {interval:g}s "
+                f"(giving up after {timeout:g}s total)",
+                file=sys.stderr,
+            )
+            sleep(interval)
+
+
 def main():
     try:
-        mcp = build_server()
+        mcp = build_server_with_retry()
     except Exception as e:
         print(f"Error: failed to build Teamscale MCP server: {e}", file=sys.stderr)
         serve(build_error_server(e), force_token_gate=True)
