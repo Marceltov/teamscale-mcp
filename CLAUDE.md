@@ -164,10 +164,17 @@ stays unauthenticated in both modes.
 
 ### Startup resilience
 
-If the OpenAPI spec can't be downloaded or parsed, `main()` falls back to
-`build_error_server()`, which completes the MCP handshake but exposes only a
-`startup_error` tool describing the failure — instead of dying with an opaque
-connection error.
+`main()` builds the server through `build_server_with_retry()`: any exception from
+`build_server()` (spec download refused because Teamscale is still booting, OIDC
+discovery failing) is retried every `TEAMSCALE_STARTUP_RETRY_INTERVAL` seconds (default
+5) for `TEAMSCALE_STARTUP_TIMEOUT` seconds (default 600). Nothing listens during the
+retry window, so the container health check reports failing until an attempt succeeds.
+Only once the window is exhausted does `main()` fall back to `build_error_server()`,
+which completes the MCP handshake but exposes only a `startup_error` tool describing
+the failure — instead of dying with an opaque connection error. The fallback does not
+retry; `/health` stays `503` until the container is restarted. See
+`adr/0001-retry-startup-until-teamscale-is-up.md` for why (`tests/test_startup_retry`
+covers the loop with an injected clock).
 
 ### Configuration
 
